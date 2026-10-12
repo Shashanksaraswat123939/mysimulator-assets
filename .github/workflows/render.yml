@@ -1,0 +1,57 @@
+name: build-and-render-assets
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["scripts/**", ".github/workflows/render.yml"]
+env:
+  BLENDER_URL: https://download.blender.org/release/Blender5.2/blender-5.2.2-linux-x64.tar.xz
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [liveries, cars, crew, equipment, venue, scenes]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Blender
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: blender
+          key: blender-5.2.2-linux
+      - name: Download Blender
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL "$BLENDER_URL" -o b.tar.xz
+          mkdir blender && tar xf b.tar.xz -C blender --strip-components=1
+      - name: System libraries
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libxi6 libxrender1 libxkbcommon0 libxxf86vm1 libxfixes3 libgl1 libegl1 libsm6 libxext6
+      - name: Build and render ${{ matrix.group }}
+        run: ./blender/blender -b --factory-startup --python scripts/build_all.py -- out ${{ matrix.group }} 32 2>&1 | tee build_${{ matrix.group }}.log | grep -E "ASSET_|GROUP_DONE|Error|Traceback|File \"|rror" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: out-${{ matrix.group }}
+          path: |
+            out/
+            build_${{ matrix.group }}.log
+  finalize:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: out-*
+          merge-multiple: true
+          path: merged
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+      - run: python3 scripts/finalize.py merged/out || python3 scripts/finalize.py merged
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-all
+          path: merged
